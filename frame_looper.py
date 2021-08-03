@@ -2,8 +2,6 @@ import os
 import cv2
 import pandas as pd
 import numpy as np
-import json
-from datetime import datetime
 
 from utils import load_json, imshow_frame
 
