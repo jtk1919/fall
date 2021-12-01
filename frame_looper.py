@@ -85,11 +85,23 @@ class FrameLooper:
         self.dilate_bending = lambda x: (1 if np.sum(x == 1) >= 2 else x.iloc[-1])
         self.dilate_var_CoG = lambda x:(1 if np.sum(x==1) >= 1 else x.iloc[-1])
 
+        self.person_person_occ_thresh = 0.01 # threshold for iou based occlusion detection
+
         self.start_frame_index = 76794 # 26140, 52703-30, 59737, 76794
 
 
     def convert_point_from_sticky2bbox(self, x, y, bbox_width, bbox_height):
-        # x and y are in sticky size coord. Convert them to bbox
+        """
+        Converts an x,y pixel value from with respect to sticky height, width to bbox height, width
+        Example a pose joint has x,y pixel value and is defined wrt sticky height, width. We want the pose joint
+        wrt bbox height,width. Then use this function.
+
+        :param x: (int) horizontal x value of pixel in image
+        :param y: (int) vertical y value of pixel in image
+        :param bbox_width: (int) width of the bbox
+        :param bbox_height: (int) height of the bbox
+        :return: converted x,y pixel value, (int), (int)
+        """
         sticky_width = self.sticky_size[0]
         sticky_height = self.sticky_size[1]
 
@@ -99,19 +111,16 @@ class FrameLooper:
 
         return new_x, new_y
 
-    def convert_point_from_bbox2enlargedbbox(self, x, y, bbox_width, bbox_height):
-
-        enlarged_height = self.sticky_size[1]
-        enlarged_width = enlarged_height * (bbox_width/bbox_height)
-
-        # convert the point from wrt sticky to wrt bbox
-        new_x = int(enlarged_width * (x / bbox_width))
-        new_y = int(enlarged_height * (y / bbox_height))
-
-        return new_x, new_y
-
     def convert_point_from_bbox2sticky(self, x, y, bbox_width, bbox_height):
-        # x and y are in bbox coord. Convert them to sticky size
+        """
+        Converts an x,y pixel value from with respect to bbox height, width to sticky height, width.
+
+        :param x: (int) horizontal x value of pixel in image
+        :param y: (int) vertical y value of pixel in image
+        :param bbox_width: (int) width of the bbox
+        :param bbox_height: (int) height of the bbox
+        :return: converted x,y pixel value, (int), (int)
+        """
         sticky_width = self.sticky_size[0]
         sticky_height = self.sticky_size[1]
 
@@ -121,7 +130,39 @@ class FrameLooper:
 
         return new_x, new_y
 
+    def convert_point_from_bbox2enlargedbbox(self, x, y, bbox_width, bbox_height):
+        """
+        Converts an x,y pixel value from with respect to bbox height,width to a
+        fixed height and same aspect ratio as bbox
+        Example a pose joint has x,y pixel value and is defined wrt bbox height, width.
+        We enlarge the bbox height respecting its original aspect ratio.
+        Then we find the pose joint wrt to this enlarged bbox.
+
+        :param x: (int) horizontal x value of pixel in image
+        :param y: (int) vertical y value of pixel in image
+        :param bbox_width: (int) width of the bbox
+        :param bbox_height: (int) height of the bbox
+        :return: converted x,y pixel value, (int), (int)
+        """
+        enlarged_height = self.sticky_size[1] # fixed height that we want
+        enlarged_width = enlarged_height * (bbox_width/bbox_height)#corresponding width respecting aspect ratio of bbox
+
+        # convert the point from wrt bbox to wrt enlarged bbox
+        new_x = int(enlarged_width * (x / bbox_width))
+        new_y = int(enlarged_height * (y / bbox_height))
+
+        return new_x, new_y
+
     def rescale_bbox_for_stickies(self, bbox):
+        """
+        Rescales the bbox left, top, right, bottom to make the stickies centered. That is,
+        adding some padding around stickies so that the stickies look centered wrt bbox. This is because,
+        sticky model gets this type of padded bbox as input, which we call a viddie.
+        This function converts bbox to viddie.
+
+        :param bbox: (dict) bbox with top, left, right, bottom
+        :return: (dict) rescaled bbox
+        """
         # rescales bbox for drawing stickies and rescaling stickies to bbox coord
         bbox_width = bbox['right'] - bbox['left']
         bbox_height = bbox['bottom'] - bbox['top']
@@ -144,11 +185,18 @@ class FrameLooper:
         return bbox
 
     def person_person_occlusion(self, current_det, all_detections):
-        # current bbox
+        """
+        Find iou based occlusion between two bboxes. That is,
+        between given current bbox and and all other bboxes in the frame
+        :param current_det: (dict) given detection
+        :param all_detections: (list)  list of all other detections in the frame
+        :return: 0 or 1, if occluded or not
+        """
+        # current bbox from given detection
         bbox = current_det['norm_bounding_box']
         current_crunch = [int(bbox['left']), int(bbox['top']), int(bbox['right']), int(bbox['bottom'])]
 
-        # gather all the candidate bboxes
+        # gather all the candidate bboxes from other detections in frame
         candidates = []
         for query_det in all_detections:
             if query_det['id'] != current_det['id']:
@@ -161,7 +209,7 @@ class FrameLooper:
             current_crunch = np.array(current_crunch)
             # find intersection over union between current bbox and all candidates
             iou = get_occ_iou(current_crunch, candidates)
-            if iou> 0.01:
+            if iou > self.person_person_occ_thresh:  # if iou overlap is greater than threshold, then occ is true
                 occlusion = 1
             else:
                 occlusion = 0
@@ -194,7 +242,7 @@ class FrameLooper:
                 if det['id'] not in self.track_dict:
                     self.track_dict[det['id']] = {}
                 # get all data for the track for that frame
-                frame_dict, key_points = self.fill_frame_dict(self.frame_index, det)
+                frame_dict = self.fill_frame_dict(self.frame_index, det)
                 # find if it is occluded by any other track, bbox iou based occlusion detection
                 pp_occ = self.person_person_occlusion(det, detections)
                 frame_dict['occlusion'] = frame_dict['occlusion'] | pp_occ
@@ -206,7 +254,7 @@ class FrameLooper:
                                                               self.frame_index + 1)}
 
                 # detect falling
-                falling_conf, bending_conf = self.falling_detector(self.track_dict[det['id']], det['id'])
+                falling_conf, bending_conf = self.falling_detector(self.track_dict[det['id']])
                 if falling_conf > 0:
                     print(self.frame_index, det['id'], 'falling', np.round(falling_conf, 2))
                 if bending_conf > 0:
@@ -223,13 +271,23 @@ class FrameLooper:
         print('Total time ', total_time)
 
     def fill_frame_dict(self, frame_index, det):
+        """
+        Creates a dict having the frame data for a given detection of a frame. This frame data will have all the
+        information necessary for performing falling detection, such as center of gravity CoG and pose joints
+        of detection with respect to different coordinates.
+        :param frame_index: (int) current frame index
+        :param det: (dict) current detection in the frame
+        :return: (dict) frame dict
+        """
+        # initialise the frame dict
         frame_dict = {'trackid': det['id'], 'frame_index': frame_index}
 
-        # bbox
+        # extract bbox
         bbox = det['norm_bounding_box']
         frame_dict['bb_left'], frame_dict['bb_top'], frame_dict['bb_right'], frame_dict['bb_bottom'] = \
             int(bbox['left']), int(bbox['top']), int(bbox['right']), int(bbox['bottom'])
 
+        # rescale the bbox to center the stickies and add padding. i.e., convert bbox to viddie box
         bbox_rescaled = self.rescale_bbox_for_stickies(bbox.copy())
 
         bbox_width_rescaled = bbox_rescaled['right'] - bbox_rescaled['left']
@@ -237,7 +295,7 @@ class FrameLooper:
         bbox_width = bbox['right'] - bbox['left']
         bbox_height = bbox['bottom'] - bbox['top']
 
-        # pose
+        # extract pose joints or say key points
         pose = det['body_skeleton']
         key_points_bbox = []
         key_points_actual_bbox = []
@@ -251,7 +309,7 @@ class FrameLooper:
             frame_dict[key + '_frame_y'] = y
             frame_dict[key + '_frame_score'] = value['score']
 
-            # convert keypoint from frame to bbox rescaled (to center the sticky and add borders)
+            # convert keypoint from frame to bbox rescaled
             x = value['x'] - bbox_rescaled['left']
             y = value['y'] - bbox_rescaled['top']
             # convert keypoint from bbox rescaled size to sticky size, i.e.
@@ -281,25 +339,24 @@ class FrameLooper:
             frame_dict[key + '_actual_bbox_y'] = y_actual_bbox
             frame_dict[key + '_actual_bbox_score'] = value['score']
 
-        # find CoG
+        # find CoG in different coord
         key_points_bbox = np.array(key_points_bbox)
-        CoG_bbox = self.find_CoG_from_pose(key_points_bbox)
+        CoG_bbox = self.find_CoG_from_pose(key_points_bbox)  # CoG in bbox coord
         frame_dict['CoG_bbox_x'] = CoG_bbox[0]
         frame_dict['CoG_bbox_y'] = CoG_bbox[1]
         frame_dict['CoG_bbox_score'] = CoG_bbox[2]
         key_points_frame = np.array(key_points_frame)
-        CoG_frame = self.find_CoG_from_pose(key_points_frame)
+        CoG_frame = self.find_CoG_from_pose(key_points_frame)  # CoG in frame coord
         frame_dict['CoG_frame_x'] = CoG_frame[0]
         frame_dict['CoG_frame_y'] = CoG_frame[1]
         frame_dict['CoG_frame_score'] = CoG_frame[2]
         key_points_norm = np.array(key_points_norm)
-        CoG_norm = self.find_CoG_from_pose(key_points_norm)
+        CoG_norm = self.find_CoG_from_pose(key_points_norm)  # CoG in sticky size coord
         frame_dict['CoG_norm_x'] = CoG_norm[0]
         frame_dict['CoG_norm_y'] = CoG_norm[1]
         frame_dict['CoG_norm_score'] = CoG_norm[2]
 
-        # occluded zone
-        # if 85 < bbox['left'] < 500 and bbox['bottom'] < self.frame_height - 10:
+        # manually define an occluded zone according to camera setup
         # if 10 < bbox['left'] and bbox['right'] < self.frame_width-10 and 200 < bbox['bottom'] < self.frame_height - 10:
         #     occlusion = 0
         # else:
@@ -307,20 +364,26 @@ class FrameLooper:
         occlusion = 0
         frame_dict['occlusion'] = occlusion
 
+        return frame_dict
 
-        return frame_dict, key_points_norm
 
+    def falling_detector(self, track_framedict_list):
+        """
+        Given a history of pose joints and CoG over time for a track, this function detects falling and bending actions
+        :param track_framedict_list: (list) This is a list of frame dicts for a given track. The frame dict ranges
+        from current frame to a certain number of frames in the past. Basically a frame data history for the track
+        :return: (float 0 to 1), (float 0 to 1) falling confidence and bending confidence
+        """
 
-    def falling_detector(self, track_framedict_list, trackid):
-
+        # convert the list of dicts to pandas
         track_info = pd.DataFrame.from_dict(track_framedict_list, orient='index')
         track_info = track_info.reindex(list(range(track_info.index.min(), track_info.index.max() + 1)), fill_value=np.nan)
 
-        # position of bbox in image based occlusion
+        # occlusion condition
         occlusion_cond = track_info['occlusion'] == 1
 
-        # bending detection
-        # find shoulder, hip, ankle middle
+        # # # bending detection
+        # find shoulder and hip middle
         track_info['shoulder_middle_x'] = (track_info['shoulder_left_x'] + track_info['shoulder_right_x']) / 2
         track_info['shoulder_middle_y'] = (track_info['shoulder_left_y'] + track_info['shoulder_right_y']) / 2
         track_info['shoulder_middle_score'] = np.mean([track_info['shoulder_left_score'],
@@ -330,17 +393,16 @@ class FrameLooper:
         track_info['hip_middle_y'] = (track_info['hip_left_y'] + track_info['hip_right_y']) / 2
         track_info['hip_middle_score'] = np.mean([track_info['hip_left_score'], track_info['hip_right_score']], axis=0)
 
-        # distance between shoulder and hip
+        # distance between shoulder middle and hip middle
         track_info['dist_shoulder_hip_y'] = track_info['shoulder_middle_y'] - track_info['hip_middle_y']
         track_info['dist_shoulder_hip_score'] = np.mean([track_info['shoulder_middle_score'],
                                                            track_info['hip_middle_score']], axis=0)
-        # some filtering
+        # some filtering based on score and occlusion
         track_info.loc[(track_info['dist_shoulder_hip_score'] < self.kp_thresh) | (occlusion_cond),
                        ['dist_shoulder_hip_y']] = np.nan
         # some smoothing
         track_info['dist_shoulder_hip_y'] = track_info['dist_shoulder_hip_y'].rolling(
             self.smooth_window).mean()
-
 
         # find trunk angle
         track_info['trunk_angle_y'] = np.rad2deg(
@@ -354,9 +416,7 @@ class FrameLooper:
         # some smoothing
         track_info['trunk_angle_y'] = track_info['trunk_angle_y'].rolling(self.smooth_window).mean()
 
-
-
-        # # # bending
+        # find bending based on trunk angle and distance between shoulder and hip middle
         track_info['bending'] = np.zeros_like(track_info['occlusion'])
         trunk_angle_condition = ((track_info['trunk_angle_y'] > -70) | (track_info['trunk_angle_y'] < -120))
         bending_condition = ((track_info['dist_shoulder_hip_y'] > -44) & trunk_angle_condition) | trunk_angle_condition
@@ -367,10 +427,15 @@ class FrameLooper:
         track_info['bending'] = track_info['bending'].rolling(self.bending_dilate_delta,
                                                               min_periods=self.delta_min).apply(self.dilate_bending)
 
-        # # # legs occluded
+        # # # find occlusion of legs
+        # we see whether the leg joint is poking outside the bbox in y direction, i.e. vertical direction.
+        # If yes, then the legs cant be seen or say occluded
+        # check whether left/right leg has low score
         ankle_left_score_low_condition = (track_info['ankle_left_score'] < self.kp_thresh)
         ankle_right_score_low_condition = (track_info['ankle_right_score'] < self.kp_thresh)
 
+        # if both left and right ankle joints have high scores, take the maximum of left and right
+        # if not choose the ankle with highest score. if none have high score, then it is sure occluded
         track_info['ankle_max_actual_bbox_y'] = np.nan * np.ones_like(track_info['ankle_left_actual_bbox_y'])
         track_info.loc[
             ~ ankle_left_score_low_condition & ~ ankle_right_score_low_condition, ['ankle_max_actual_bbox_y']] = \
@@ -382,27 +447,18 @@ class FrameLooper:
             ankle_left_score_low_condition & ~ ankle_right_score_low_condition, ['ankle_max_actual_bbox_y']] = \
             track_info['ankle_right_actual_bbox_y']
 
-        # enlarged bbox height
-        enlarged_bbox_height = self.sticky_size[1]
+        enlarged_bbox_height = self.sticky_size[1]  # enlarged bbox height
         # difference between the ankle and bbox bottom line in y direction
         track_info['ankle_from_actual_bbox_bottom_y'] = track_info['ankle_max_actual_bbox_y'] - enlarged_bbox_height
         track_info['ankle_from_actual_bbox_bottom_score'] = np.maximum(track_info['ankle_left_score'],
                                                                        track_info['ankle_right_score'])
 
-        # # variability
-        # track_info['var_ankle_from_actual_bbox_bottom_y'] = track_info['ankle_from_actual_bbox_bottom_y'].rolling(
-        #     self.var_delta, min_periods=self.delta_min).std()
-        # track_info['var_ankle_from_actual_bbox_bottom_score'] = track_info['ankle_from_actual_bbox_bottom_score']
-        # if trackid in self.interesting_trackids and self.plot and self.frame_index in self.plt_frame_index:
-        #     self.plot_function(track_info, 'ankle_from_actual_bbox_bottom', trackid)
-        #     # self.plot_function(track_info, 'var_ankle_from_actual_bbox_bottom', trackid)
-
-        # legs based occlusion
+        # if the difference is greater than a threshold, then legs are occluded
         track_info.loc[ankle_left_score_low_condition & ankle_right_score_low_condition, ['occlusion']] = 1
         track_info.loc[(track_info['ankle_from_actual_bbox_bottom_y'] > 15), ['occlusion']] = 1
 
+        # update the occlusion condition with leg occlusion
         occlusion_cond = track_info['occlusion'] == 1
-
 
         # # # trip fall detection
         # CoG
@@ -413,25 +469,22 @@ class FrameLooper:
         track_info['smooth_CoG_norm_y'] = track_info['CoG_norm_y'].rolling(self.smooth_window).mean()
         track_info['smooth_CoG_norm_score'] = track_info['CoG_norm_score']
 
-        # variability of CoG
+        # variability/std of CoG
         track_info['var_smooth_CoG_norm_x'] = track_info['smooth_CoG_norm_x'].rolling(self.var_delta, min_periods=self.delta_min).std()
         track_info['var_smooth_CoG_norm_y'] = track_info['smooth_CoG_norm_y'].rolling(self.var_delta, min_periods=self.delta_min).std()
         track_info['var_smooth_CoG_norm_score'] = track_info['smooth_CoG_norm_score']
-
-
 
         # velocity of CoG
         track_info['vel_CoG_norm_x'] = track_info['smooth_CoG_norm_x'].diff(periods=self.vel_delta)
         track_info['vel_CoG_norm_y'] = track_info['smooth_CoG_norm_y'].diff(periods=self.vel_delta)
         track_info['vel_CoG_norm_score'] = track_info['smooth_CoG_norm_score']
 
-
-
-        ### CoG_bbox of legs
+        # # # find CoG_bbox of legs
         track_info['hip_middle_bbox_x'] = (track_info['hip_left_bbox_x'] + track_info['hip_right_bbox_x']) / 2
         track_info['hip_middle_bbox_y'] = (track_info['hip_left_bbox_y'] + track_info['hip_right_bbox_y']) / 2
         track_info['hip_middle_bbox_score'] = np.mean([track_info['hip_left_bbox_score'],
                                                          track_info['hip_right_bbox_score']], axis=0)
+        # we use the following joints to find CoG of legs in bbox coord
         dist_x, dist_y, score = [], [], []
         for joint in ['ankle_left', 'ankle_right', 'knee_left', 'knee_right', 'hip_left', 'hip_right']:
             track_info['dist_' + joint + '_x'] = track_info[joint + '_bbox_x'] - track_info['hip_middle_bbox_x']
@@ -453,102 +506,82 @@ class FrameLooper:
         track_info['CoG_bbox_legs_x'] = track_info['CoG_bbox_legs_x'].rolling(self.smooth_window).mean()
         track_info['CoG_bbox_legs_y'] = track_info['CoG_bbox_legs_y'].rolling(self.smooth_window).mean()
 
-        # variability
+        # variability of CoG_bbox of legs
         track_info['var_CoG_bbox_legs_x'] = track_info['CoG_bbox_legs_x'].rolling(self.var_delta,
                                                                                   min_periods=self.delta_min).std()
         track_info['var_CoG_bbox_legs_y'] = track_info['CoG_bbox_legs_y'].rolling(self.var_delta,
                                                                                   min_periods=self.delta_min).std()
         track_info['var_CoG_bbox_legs_score'] = track_info['CoG_bbox_legs_score']
 
-
-
-        # condition on var_CoG_bbox_legs
+        # condition on var_CoG_bbox_legs to detect falling/tripping
         track_info['var_CoG_bbox_legs'] = np.zeros_like(track_info['occlusion'])
         track_info.loc[(np.abs(track_info['var_CoG_bbox_legs_y']) >= 2), ['var_CoG_bbox_legs']] = 1
 
-        # detection
+        # falling/tripping detection based on var and vel of CoG and var of CoG_bbox of legs
         track_info['detection'] = np.zeros_like(track_info['occlusion'])
         detection_condition = (np.abs(track_info['var_smooth_CoG_norm_y']) > 4) | \
                               (np.abs(track_info['vel_CoG_norm_y']) > 8) | \
                               (np.abs(track_info['var_CoG_bbox_legs_y']) > 4)
         track_info.loc[detection_condition, ['detection']] = 1
 
-
         # dilate var_CoG_bbox_legs
         track_info['var_CoG_bbox_legs'] = track_info['var_CoG_bbox_legs'].rolling(self.CoG_dilate_delta,
                                                                    min_periods=self.delta_min).apply(self.dilate_var_CoG)
 
         # remove false positives from detection using dilated var_CoG_bbox_legs
+        # i.e., if var_CoG_bbox_legs is 0, then it is not falling/tripping for sure
         track_info.loc[(np.abs(track_info['var_CoG_bbox_legs']) == 0), ['detection']] = 0
-
 
         # remove bending from falling detection
         track_info.loc[track_info['bending'] == 1, ['detection']] = 0
 
-
-
-
-
-
-        # detection confidence
-        # track_info['detection_conf'] = track_info['detection'].rolling(conf_delta, min_periods=var_delta_min).sum()/conf_delta
+        # find the detection confidence
+        # take a window of length conf_delta starting from current frame,
+        # sum all falling detection frames in that window and normalise it with window size
         limit = np.min([len(track_info['detection']), self.conf_delta])
         detection_conf = np.sum(track_info['detection'].iloc[-limit:]) / self.conf_delta
         if np.isnan(detection_conf): detection_conf = 0
         detection_conf = np.round(detection_conf, 2)
 
-        # bending confidence
-        # track_info['bending_conf'] = track_info['bending'].rolling(conf_delta, min_periods=var_delta_min).sum()/conf_delta
+        # find the bending confidence same as before
         limit = np.min([len(track_info['bending']), self.conf_delta])
         bending_conf = np.sum(track_info['bending'].iloc[-limit:]) / self.conf_delta
         if np.isnan(bending_conf): bending_conf = 0
         bending_conf = np.round(bending_conf, 2)
 
-        # one more chck to remove bending false positives
+        # one more check to remove bending false positives
         if bending_conf > 0:
             detection_conf = 0
 
         return detection_conf, bending_conf
 
     def find_CoG_from_pose(self, keypoints, all_joints=False):
+        """
+        Finds center of gravity CoG from pose joint positions
+        :param keypoints: (list) list of pose joint positions' x, y pixel values
+        :param all_joints: (bool) whether to include all joints in CoG calculation.
+        If false, then head is not included in CoG calculation as it tends to  be occluded or noisy
+        :return: (list) CoG's x, y, score
+        """
 
+        # whether to include include heads for CoG calculation
         if all_joints:
             start_index = 0
         else:
             start_index = 5
 
+        # if there are no pose joints
         if len(keypoints) == 0:
             return [np.nan, np.nan, np.nan]
 
+        # we define the CoG with respect to middle of the hip joints
         hip_middle = [int((keypoints[11, 0] + keypoints[12, 0]) / 2), int((keypoints[11, 1] + keypoints[12, 1]) / 2)]
+        # find the distance between all joints from hip middle and take an average of the distances. That's the CoG
         dist_x, dist_y = [], []
         for point in keypoints[start_index:, :]:
             dist_x.append(point[0] - hip_middle[0])
             dist_y.append(point[1] - hip_middle[1])
-        mean_score = np.mean(keypoints[start_index:, 2])
-        # CoG = [int(np.mean(dist_x) + hip_middle[0]), int(np.mean(dist_y) + hip_middle[1]), mean_score]
+        mean_score = np.mean(keypoints[start_index:, 2])  # mean score of all joints is taken as CoG's score
         CoG = [int(np.mean(dist_x)), int(np.mean(dist_y)), mean_score]
 
         return CoG
-
-    def find_CoG_from_legs(self, keypoints):
-
-        if len(keypoints)==0:
-            return [np.nan,np.nan,np.nan]
-
-        # count = len([elem for elem in keypoints[5:6,2] + keypoints[11:12,2] if elem < self.kp_thresh])
-        # if count>0:
-        #     return [np.nan,np.nan,np.nan]
-
-        hip_middle = [int((keypoints[11,0]+keypoints[12,0])/2), int((keypoints[11,1]+keypoints[12,1])/2)]
-        dist_x, dist_y = [], []
-        for point in keypoints[11:,:]:
-            dist_x.append(point[0]-hip_middle[0])
-            dist_y.append(point[1]-hip_middle[1])
-        mean_score = np.mean(keypoints[5:6,2] + keypoints[11:12,2])
-        # CoG = [int(np.mean(dist_x) + hip_middle[0]), int(np.mean(dist_y) + hip_middle[1]), mean_score]
-        CoG = [int(np.mean(dist_x)), int(np.mean(dist_y)), mean_score]
-
-        return CoG
-
-
