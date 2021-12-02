@@ -241,7 +241,7 @@ class FrameLooper:
                 frame_dict['occlusion'] = frame_dict['occlusion'] | pp_occ
                 # update the frame data to the track dict
                 self.track_dict[det['id']][self.frame_index] = frame_dict
-                # only have the latest frame data and remove the rest of history
+                # only have the latest frames and remove the rest of history
                 self.track_dict[det['id']] = {key: value for key, value in self.track_dict[det['id']].items()
                                               if key in range(self.frame_index - int(75),
                                                               self.frame_index + 1)}
@@ -359,16 +359,17 @@ class FrameLooper:
 
         return frame_dict
 
-    def falling_detector(self, track_framedict_list):
+    def falling_detector(self, track_framedict):
         """
         Given a history of pose joints and CoG over time for a track, this function detects falling and bending actions
-        :param track_framedict_list: (list) This is a list of frame dicts for a given track. The frame dict ranges
-        from current frame to a certain number of frames in the past. Basically a frame data history for the track
+        :param track_framedict: (dict) This is a dict, where keys are frames numbers
+        and values are frame dicts for a given track. The keys range from current frame to a certain number of
+        frames in the past. Basically a frame data history for the track
         :return: (float 0 to 1), (float 0 to 1) falling confidence and bending confidence
         """
 
-        # convert the list of dicts to pandas
-        track_info = pd.DataFrame.from_dict(track_framedict_list, orient='index')
+        # convert the dict to pandas and fill in missing frame numbers with nan
+        track_info = pd.DataFrame.from_dict(track_framedict, orient='index')
         track_info = track_info.reindex(list(range(track_info.index.min(), track_info.index.max() + 1)),
                                         fill_value=np.nan)
 
