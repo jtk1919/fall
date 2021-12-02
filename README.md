@@ -12,6 +12,8 @@ by the algorithm.
     - Video's cpp json (video_name + '.json')
     - Falling detection output json--> (video_name + '_output.json'). 
     This is produced from the algorithm
+## Requirements
+Install the libraries in requirements.txt file   
 
 ## Run falling detector
 Run the code main.py. Set the root folder of all the videos in video_root variable.

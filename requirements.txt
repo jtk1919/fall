@@ -1,0 +1,5 @@
+pandas==1.2.4
+numpy
+json
+time
+cv2
