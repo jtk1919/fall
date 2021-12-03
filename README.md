@@ -1,4 +1,4 @@
-# kajima_falling_down_detector
+# falling_down_detector
 To detect trips/slips/fall/bending in a given video. 
 
 The video is first run through the cpp pipeline
