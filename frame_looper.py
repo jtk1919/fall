@@ -2,7 +2,7 @@ import os
 import time
 import cv2
 import pandas as pd
-from utils import *
+from .utils import *
 
 
 class FrameLooper:

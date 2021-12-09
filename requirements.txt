@@ -1,5 +1,4 @@
-pandas==1.2.4
-numpy
-json
-time
-cv2
+pandas==1.1.5
+numpy==1.19.1
+opencv-python~=4.5.1.48
+utils==1.0.1
