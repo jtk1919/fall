@@ -13,7 +13,10 @@ by the algorithm.
     - Falling detection output json--> (video_name + '_output.json'). 
     This is produced from the algorithm
 ## Requirements
-Install the libraries in requirements.txt file   
+Install the libraries in requirements.txt file 
+
+Add the project to the PYTHONPATH to be able to run the scripts directly and to avoid any relative import errors
+
 
 ## Run falling detector
 Run the code main.py. Set the root folder of all the videos in video_root variable.
