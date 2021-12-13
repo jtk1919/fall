@@ -1,6 +1,6 @@
 import os
 import time
-from .frame_looper import FrameLooper
+from .falling_detector import FallingDetector
 
 """
 This is the main function. Change the video root. 
@@ -12,7 +12,7 @@ t0 = time.time()
 for video_name in os.listdir(video_root):
     t1 = time.time()
     print(video_name, ' #####################################')
-    frame_looper = FrameLooper(video_name, video_root)
+    frame_looper = FallingDetector(video_name, video_root)
     if frame_looper.video_found and frame_looper.cpp_json_found:
         frame_looper.run()
         t2 = time.time()

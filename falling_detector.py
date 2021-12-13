@@ -1,10 +1,11 @@
 import os
 import time
 import cv2
-from .utils import *
+import numpy as np
+from .utils import load_json, save_json, get_occ_iou
 
 
-class FrameLooper:
+class FallingDetector:
 
     def __init__(self, video_name, video_root):
         """
