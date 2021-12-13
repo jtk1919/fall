@@ -1,4 +1,4 @@
-from .utils import load_json
+from falling_down_detector.utils import load_json
 
 ####
 # compares the output of two jsons generated from the falling detection algorithm.

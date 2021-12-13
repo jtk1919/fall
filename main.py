@@ -1,6 +1,6 @@
 import os
 import time
-from .falling_detector import FallingDetector
+from falling_down_detector.falling_detector import FallingDetector
 
 """
 This is the main function. Change the video root. 

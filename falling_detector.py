@@ -2,7 +2,7 @@ import os
 import time
 import cv2
 import numpy as np
-from .utils import load_json, save_json, get_occ_iou
+from falling_down_detector.utils import load_json, save_json, get_occ_iou
 
 
 class FallingDetector:

@@ -12,7 +12,7 @@ The detected trips/slips/fall/bending are updated in the cpp output json file an
 ## Dependencies
 Install the libraries in requirements.txt file 
 
-Add the project to the PYTHONPATH to be able to run the scripts directly and to avoid any relative import errors
+Add the project path to the PYTHONPATH to be able to run the scripts directly
 
 ## Installing
 First, clone the repo. Then take note of the following folder structure to run the falling detector.
