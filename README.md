@@ -44,3 +44,7 @@ Following are some common false negatives
 - Missing detections, people's grey dress is confused with background
 or frame gets blurred/smudged patch by patch 
 
+In the algorithm's bending detection, distance between shoulder and hip in y direction and trunk angle are the conditions
+found. But distance between shoulder and hip condition is redundant in the current version (i.e. it is not really used. 
+Only trunk condition is used.) Solve this later. 
+

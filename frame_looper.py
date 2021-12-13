@@ -1,7 +1,6 @@
 import os
 import time
 import cv2
-import pandas as pd
 from .utils import *
 
 
@@ -76,9 +75,9 @@ class FrameLooper:
         self.smooth_window = 3
 
         # a function to dilate the bending and detection
-        # in a rolling window, if the sum exceeds a threshold, set the current anchor of the rolling window to 1
-        self.dilate_bending = lambda x: (1 if np.sum(x == 1) >= 2 else x.iloc[-1])
-        self.dilate_var_CoG = lambda x: (1 if np.sum(x == 1) >= 1 else x.iloc[-1])
+        # in a window, if the sum exceeds a threshold, then return 1 else return the same value as before
+        self.dilate_bending = lambda x: (1 if np.nansum(x == 1) >= 2 else x[-1])
+        self.dilate_var_CoG = lambda x: (1 if np.nansum(x == 1) >= 1 else x[-1])
 
         self.person_person_occ_thresh = 0.01  # threshold for iou based occlusion detection
 
@@ -220,10 +219,8 @@ class FrameLooper:
 
         for self.frame_index in range(len(self.cpp_json["outputs"])):
             start = time.time()
-            self.raw_frame_index = self.cpp_json["outputs"][self.frame_index]['raw_index']
-
-            # do stuff here
             if self.frame_index % 10000 == 0: print(f"{self.frame_index} / {total_frame}")
+            # get the detections of the frame
             detections = self.cpp_json["outputs"][self.frame_index]["detections"]
             # check if the detection has track id and pose
             detections = [det for det in detections if 'id' in det.keys() and 'body_skeleton' in det.keys()
@@ -231,14 +228,18 @@ class FrameLooper:
             for ii in range(len(detections)):
                 det = detections[ii]
 
-                # create track id in track dict for track analysis
-                if det['id'] not in self.track_dict:
-                    self.track_dict[det['id']] = {}
                 # get all data for the track for that frame
                 frame_dict = self.fill_frame_dict(self.frame_index, det)
                 # find if it is occluded by any other track, bbox iou based occlusion detection
                 pp_occ = self.person_person_occlusion(det, detections)
+                # combine person person occlusion with occlusion based on position of bbox in image
                 frame_dict['occlusion'] = frame_dict['occlusion'] | pp_occ
+                # update the frame dict with falling detection related information
+                frame_dict = self.fill_frame_dict_fall_det_data(frame_dict.copy())
+
+                # create track id in track dict for track analysis
+                if det['id'] not in self.track_dict:  # then its the first frame of the track
+                    self.track_dict[det['id']] = {}
                 # update the frame data to the track dict
                 self.track_dict[det['id']][self.frame_index] = frame_dict
                 # only have the latest frames and remove the rest of history
@@ -265,7 +266,7 @@ class FrameLooper:
 
     def fill_frame_dict(self, frame_index, det):
         """
-        Creates a dict having the frame data for a given detection of a frame. This frame data will have all the
+        Creates a dict having the frame data for a given detection of a frame. This frame data will have the
         information necessary for performing falling detection, such as center of gravity CoG and pose joints
         of detection with respect to different coordinates.
         :param frame_index: (int) current frame index
@@ -359,190 +360,278 @@ class FrameLooper:
 
         return frame_dict
 
-    def falling_detector(self, track_framedict):
+    def fill_frame_dict_fall_det_data(self, frame_dict):
         """
-        Given a history of pose joints and CoG over time for a track, this function detects falling and bending actions
-        :param track_framedict: (dict) This is a dict, where keys are frames numbers
-        and values are frame dicts for a given track. The keys range from current frame to a certain number of
-        frames in the past. Basically a frame data history for the track
-        :return: (float 0 to 1), (float 0 to 1) falling confidence and bending confidence
+        Updates the frame dict with all specific information necessary for performing falling detection
+        @param frame_dict: (dict) frame dict having the frame data for a given detection of a frame
+        @return: (dict) updated frame dict
         """
 
-        # convert the dict to pandas and fill in missing frame numbers with nan
-        track_info = pd.DataFrame.from_dict(track_framedict, orient='index')
-        track_info = track_info.reindex(list(range(track_info.index.min(), track_info.index.max() + 1)),
-                                        fill_value=np.nan)
+        # occlusion condition based on position of bbox in image
+        occlusion_cond = frame_dict['occlusion'] == 1
 
-        # occlusion condition
-        occlusion_cond = track_info['occlusion'] == 1
-
-        # # # bending detection
         # find shoulder and hip middle
-        track_info['shoulder_middle_x'] = (track_info['shoulder_left_x'] + track_info['shoulder_right_x']) / 2
-        track_info['shoulder_middle_y'] = (track_info['shoulder_left_y'] + track_info['shoulder_right_y']) / 2
-        track_info['shoulder_middle_score'] = np.mean([track_info['shoulder_left_score'],
-                                                       track_info['shoulder_right_score']], axis=0)
+        frame_dict['shoulder_middle_x'] = (frame_dict['shoulder_left_x'] + frame_dict['shoulder_right_x']) / 2
+        frame_dict['shoulder_middle_y'] = (frame_dict['shoulder_left_y'] + frame_dict['shoulder_right_y']) / 2
+        frame_dict['shoulder_middle_score'] = np.mean([frame_dict['shoulder_left_score'],
+                                                       frame_dict['shoulder_right_score']], axis=0)
 
-        track_info['hip_middle_x'] = (track_info['hip_left_x'] + track_info['hip_right_x']) / 2
-        track_info['hip_middle_y'] = (track_info['hip_left_y'] + track_info['hip_right_y']) / 2
-        track_info['hip_middle_score'] = np.mean([track_info['hip_left_score'], track_info['hip_right_score']], axis=0)
+        frame_dict['hip_middle_x'] = (frame_dict['hip_left_x'] + frame_dict['hip_right_x']) / 2
+        frame_dict['hip_middle_y'] = (frame_dict['hip_left_y'] + frame_dict['hip_right_y']) / 2
+        frame_dict['hip_middle_score'] = np.mean([frame_dict['hip_left_score'], frame_dict['hip_right_score']], axis=0)
 
         # distance between shoulder middle and hip middle
-        track_info['dist_shoulder_hip_y'] = track_info['shoulder_middle_y'] - track_info['hip_middle_y']
-        track_info['dist_shoulder_hip_score'] = np.mean([track_info['shoulder_middle_score'],
-                                                         track_info['hip_middle_score']], axis=0)
+        frame_dict['dist_shoulder_hip_y'] = frame_dict['shoulder_middle_y'] - frame_dict['hip_middle_y']
+        frame_dict['dist_shoulder_hip_score'] = np.mean([frame_dict['shoulder_middle_score'],
+                                                         frame_dict['hip_middle_score']], axis=0)
+
         # some filtering based on score and occlusion
-        track_info.loc[(track_info['dist_shoulder_hip_score'] < self.kp_thresh) | (occlusion_cond),
-                       ['dist_shoulder_hip_y']] = np.nan
-        # some smoothing
-        track_info['dist_shoulder_hip_y'] = track_info['dist_shoulder_hip_y'].rolling(
-            self.smooth_window).mean()
+        if (frame_dict['dist_shoulder_hip_score'] < self.kp_thresh) | (occlusion_cond):
+            frame_dict['dist_shoulder_hip_y'] = np.nan
 
         # find trunk angle
-        track_info['trunk_angle_y'] = np.rad2deg(
-            np.arctan2(track_info['shoulder_middle_y'] - track_info['hip_middle_y'],
-                       track_info['shoulder_middle_x'] - track_info['hip_middle_x']))
-        track_info['trunk_angle_score'] = np.mean([track_info['shoulder_middle_score'],
-                                                   track_info['hip_middle_score']], axis=0)
+        frame_dict['trunk_angle_y'] = np.rad2deg(
+            np.arctan2(frame_dict['shoulder_middle_y'] - frame_dict['hip_middle_y'],
+                       frame_dict['shoulder_middle_x'] - frame_dict['hip_middle_x']))
+        frame_dict['trunk_angle_score'] = frame_dict['dist_shoulder_hip_score']
+
         # some filtering
-        track_info.loc[(track_info['trunk_angle_score'] < self.kp_thresh) | (occlusion_cond),
-                       ['trunk_angle_y']] = np.nan
-        # some smoothing
-        track_info['trunk_angle_y'] = track_info['trunk_angle_y'].rolling(self.smooth_window).mean()
-
-        # find bending based on trunk angle and distance between shoulder and hip middle
-        track_info['bending'] = np.zeros_like(track_info['occlusion'])
-        trunk_angle_condition = ((track_info['trunk_angle_y'] > -70) | (track_info['trunk_angle_y'] < -120))
-        bending_condition = ((track_info['dist_shoulder_hip_y'] > -44) & trunk_angle_condition) | trunk_angle_condition
-
-        track_info.loc[bending_condition, ['bending']] = 1
-
-        # dilate bending
-        track_info['bending'] = track_info['bending'].rolling(self.bending_dilate_delta,
-                                                              min_periods=self.delta_min).apply(self.dilate_bending)
+        if (frame_dict['trunk_angle_score'] < self.kp_thresh) | (occlusion_cond):
+            frame_dict['trunk_angle_y'] = np.nan
 
         # # # find occlusion of legs
         # we see whether the leg joint is poking outside the bbox in y direction, i.e. vertical direction.
         # If yes, then the legs cant be seen or say occluded
         # check whether left/right leg has low score
-        ankle_left_score_low_condition = (track_info['ankle_left_score'] < self.kp_thresh)
-        ankle_right_score_low_condition = (track_info['ankle_right_score'] < self.kp_thresh)
+        ankle_left_score_low_condition = (frame_dict['ankle_left_score'] < self.kp_thresh)
+        ankle_right_score_low_condition = (frame_dict['ankle_right_score'] < self.kp_thresh)
 
         # if both left and right ankle joints have high scores, take the maximum of left and right
         # if not choose the ankle with highest score. if none have high score, then it is sure occluded
-        track_info['ankle_max_actual_bbox_y'] = np.nan * np.ones_like(track_info['ankle_left_actual_bbox_y'])
-        track_info.loc[
-            ~ ankle_left_score_low_condition & ~ ankle_right_score_low_condition, ['ankle_max_actual_bbox_y']] = \
-            np.maximum(track_info['ankle_left_actual_bbox_y'], track_info['ankle_right_actual_bbox_y'])
-        track_info.loc[
-            ~ ankle_left_score_low_condition & ankle_right_score_low_condition, ['ankle_max_actual_bbox_y']] = \
-            track_info['ankle_left_actual_bbox_y']
-        track_info.loc[
-            ankle_left_score_low_condition & ~ ankle_right_score_low_condition, ['ankle_max_actual_bbox_y']] = \
-            track_info['ankle_right_actual_bbox_y']
+        frame_dict['ankle_max_actual_bbox_y'] = np.nan
+        if (not ankle_left_score_low_condition) and (not ankle_right_score_low_condition):
+            frame_dict['ankle_max_actual_bbox_y'] = \
+                np.maximum(frame_dict['ankle_left_actual_bbox_y'], frame_dict['ankle_right_actual_bbox_y'])
+        if (not ankle_left_score_low_condition) and ankle_right_score_low_condition:
+            frame_dict['ankle_max_actual_bbox_y'] = frame_dict['ankle_left_actual_bbox_y']
+        if ankle_left_score_low_condition and (not ankle_right_score_low_condition):
+            frame_dict['ankle_max_actual_bbox_y'] = frame_dict['ankle_right_actual_bbox_y']
 
         enlarged_bbox_height = self.sticky_size[1]  # enlarged bbox height
         # difference between the ankle and bbox bottom line in y direction
-        track_info['ankle_from_actual_bbox_bottom_y'] = track_info['ankle_max_actual_bbox_y'] - enlarged_bbox_height
-        track_info['ankle_from_actual_bbox_bottom_score'] = np.maximum(track_info['ankle_left_score'],
-                                                                       track_info['ankle_right_score'])
+        frame_dict['ankle_from_actual_bbox_bottom_y'] = frame_dict['ankle_max_actual_bbox_y'] - enlarged_bbox_height
+        frame_dict['ankle_from_actual_bbox_bottom_score'] = np.maximum(frame_dict['ankle_left_score'],
+                                                                       frame_dict['ankle_right_score'])
 
+        # legs based occlusion
+        frame_dict['leg_occlusion'] = 0
+        # if both ankles have low scores, then legs are occluded
+        if ankle_left_score_low_condition & ankle_right_score_low_condition:
+            frame_dict['leg_occlusion'] = 1
         # if the difference is greater than a threshold, then legs are occluded
-        track_info.loc[ankle_left_score_low_condition & ankle_right_score_low_condition, ['occlusion']] = 1
-        track_info.loc[(track_info['ankle_from_actual_bbox_bottom_y'] > 15), ['occlusion']] = 1
+        if frame_dict['ankle_from_actual_bbox_bottom_y'] > 15:
+            frame_dict['leg_occlusion'] = 1
 
-        # update the occlusion condition with leg occlusion
-        occlusion_cond = track_info['occlusion'] == 1
+        # update occlusion condition with leg occlusion
+        occlusion_cond = (frame_dict['occlusion'] == 1) | (frame_dict['leg_occlusion'] == 1)
 
-        # # # trip fall detection
-        # CoG
-        # some filtering
-        track_info.loc[
-            (track_info['CoG_norm_score'] < self.kp_thresh) | (occlusion_cond), ['CoG_norm_x', 'CoG_norm_y']] = np.nan
-        # smoothing
-        track_info['smooth_CoG_norm_x'] = track_info['CoG_norm_x'].rolling(self.smooth_window).mean()
-        track_info['smooth_CoG_norm_y'] = track_info['CoG_norm_y'].rolling(self.smooth_window).mean()
-        track_info['smooth_CoG_norm_score'] = track_info['CoG_norm_score']
+        # CoG filtering
+        if (frame_dict['CoG_norm_score'] < self.kp_thresh) | (occlusion_cond):
+            frame_dict['CoG_norm_x'], frame_dict['CoG_norm_y'] = np.nan, np.nan
 
-        # variability/std of CoG
-        track_info['var_smooth_CoG_norm_x'] = track_info['smooth_CoG_norm_x'].rolling(self.var_delta,
-                                                                                      min_periods=self.delta_min).std()
-        track_info['var_smooth_CoG_norm_y'] = track_info['smooth_CoG_norm_y'].rolling(self.var_delta,
-                                                                                      min_periods=self.delta_min).std()
-        track_info['var_smooth_CoG_norm_score'] = track_info['smooth_CoG_norm_score']
-
-        # velocity of CoG
-        track_info['vel_CoG_norm_x'] = track_info['smooth_CoG_norm_x'].diff(periods=self.vel_delta)
-        track_info['vel_CoG_norm_y'] = track_info['smooth_CoG_norm_y'].diff(periods=self.vel_delta)
-        track_info['vel_CoG_norm_score'] = track_info['smooth_CoG_norm_score']
-
-        # # # find CoG_bbox of legs
-        track_info['hip_middle_bbox_x'] = (track_info['hip_left_bbox_x'] + track_info['hip_right_bbox_x']) / 2
-        track_info['hip_middle_bbox_y'] = (track_info['hip_left_bbox_y'] + track_info['hip_right_bbox_y']) / 2
-        track_info['hip_middle_bbox_score'] = np.mean([track_info['hip_left_bbox_score'],
-                                                       track_info['hip_right_bbox_score']], axis=0)
+        # find CoG_bbox of legs
+        frame_dict['hip_middle_bbox_x'] = (frame_dict['hip_left_bbox_x'] + frame_dict['hip_right_bbox_x']) / 2
+        frame_dict['hip_middle_bbox_y'] = (frame_dict['hip_left_bbox_y'] + frame_dict['hip_right_bbox_y']) / 2
+        frame_dict['hip_middle_bbox_score'] = np.mean([frame_dict['hip_left_bbox_score'],
+                                                       frame_dict['hip_right_bbox_score']], axis=0)
         # we use the following joints to find CoG of legs in bbox coord
         dist_x, dist_y, score = [], [], []
         for joint in ['ankle_left', 'ankle_right', 'knee_left', 'knee_right', 'hip_left', 'hip_right']:
-            track_info['dist_' + joint + '_x'] = track_info[joint + '_bbox_x'] - track_info['hip_middle_bbox_x']
-            track_info['dist_' + joint + '_y'] = track_info[joint + '_bbox_y'] - track_info['hip_middle_bbox_y']
-            track_info['dist_' + joint + '_score'] = np.minimum(track_info[joint + '_bbox_score'],
-                                                                track_info['hip_middle_bbox_score'])
+            frame_dict['dist_' + joint + '_x'] = frame_dict[joint + '_bbox_x'] - frame_dict['hip_middle_bbox_x']
+            frame_dict['dist_' + joint + '_y'] = frame_dict[joint + '_bbox_y'] - frame_dict['hip_middle_bbox_y']
+            frame_dict['dist_' + joint + '_score'] = np.minimum(frame_dict[joint + '_bbox_score'],
+                                                                frame_dict['hip_middle_bbox_score'])
 
-            dist_x.append(track_info['dist_' + joint + '_x'])
-            dist_y.append(track_info['dist_' + joint + '_y'])
-            score.append(track_info[joint + '_score'])
+            dist_x.append(frame_dict['dist_' + joint + '_x'])
+            dist_y.append(frame_dict['dist_' + joint + '_y'])
+            score.append(frame_dict[joint + '_score'])
 
-        track_info['CoG_bbox_legs_x'] = np.mean(dist_x, axis=0)
-        track_info['CoG_bbox_legs_y'] = np.mean(dist_y, axis=0)
-        track_info['CoG_bbox_legs_score'] = np.mean(score, axis=0)
+        frame_dict['CoG_bbox_legs_x'] = np.mean(dist_x, axis=0)
+        frame_dict['CoG_bbox_legs_y'] = np.mean(dist_y, axis=0)
+        frame_dict['CoG_bbox_legs_score'] = np.mean(score, axis=0)
         # filtering
-        track_info.loc[(track_info['CoG_bbox_legs_score'] < self.kp_thresh) | (occlusion_cond),
-                       ['CoG_bbox_legs_x', 'CoG_bbox_legs_y']] = np.nan
-        # smoothing
-        track_info['CoG_bbox_legs_x'] = track_info['CoG_bbox_legs_x'].rolling(self.smooth_window).mean()
-        track_info['CoG_bbox_legs_y'] = track_info['CoG_bbox_legs_y'].rolling(self.smooth_window).mean()
+        if (frame_dict['CoG_bbox_legs_score'] < self.kp_thresh) | (occlusion_cond):
+            frame_dict['CoG_bbox_legs_x'], frame_dict['CoG_bbox_legs_y'] = np.nan, np.nan
+
+        return frame_dict
+
+    def variability(self, history_array):
+        """
+        Finds the variability/std of a given 1D array for a particular time window, ignoring Nans.
+        @param history_array: (array) 1D array has the information of a series of frames of a track
+        @return: (float) variability/std
+        """
+        # if the length of the array is greater than a minimum threshold and the array has at least certain number of
+        # non Nan values in the chosen time window, then find variability, else return Nan
+        if len(history_array) >= self.delta_min and sum(~np.isnan(history_array[-self.var_delta:])) >= self.delta_min:
+            var = np.nanstd(history_array[-self.var_delta:], ddof=1)
+        else:
+            var = np.nan
+        return var
+
+    def smoothing(self, history_array):
+        """
+        Finds the mean of a given 1D array for a particular time window, ignoring Nans.
+        @param history_array: (array) 1D array has the information of a series of frames of a track
+        @return: (float) mean of the given array
+        """
+        # if the length of the array is greater than a minimum threshold and the array has at least certain number of
+        # non Nan values in the chosen time window, then find mean, else return Nan
+        if len(history_array) >= self.smooth_window and \
+                sum(~np.isnan(history_array[-self.smooth_window:])) >= self.smooth_window:
+            smoothed = np.nanmean(history_array[-self.smooth_window:])
+        else:
+            smoothed = np.nan
+        return smoothed
+
+    def create_list_from_dict(self, track_framedict, variable_name, frame_index_min, frame_index_max):
+        """
+        Given a variable_name of the track frame dict, create a 1D numpy array where each row
+        represents a frame index and the value will be the variable data of that frame index.
+        Fill in with nans for frame indexes that are missing data
+        @param track_framedict: (dict) key is frame index, value is frame dict
+        @param variable_name: (str) name of the variable to create list for from frame dict
+        @param frame_index_min: (int) min of track_framedict keys
+        @param frame_index_max: (int) max of track_framedict keys
+        @return: (array) 1D numpy array
+        """
+
+        variable_name_list = np.array([track_framedict[frame_index][variable_name]
+                                       if frame_index in track_framedict.keys() else np.nan
+                                       for frame_index in range(frame_index_min, frame_index_max + 1)])
+        return variable_name_list
+
+    def falling_detector(self, track_framedict):
+        """
+        Given a history of pose joints, CoG and other related info over time for a track, this function detects falling
+        and bending actions
+        :param track_framedict: (dict) This is a dict, where keys are frames numbers
+        and values are frame dicts for a given track. The keys range from current frame to a certain number of
+        frames in the past. Basically a frame data history for the track
+        :return: (float 0 to 1), (float 0 to 1) falling confidence and bending confidence
+        """
+        list_of_frame_index = list(track_framedict.keys())  # all the available frame indexes for the track
+        frame_index_min = np.min(list_of_frame_index)
+        frame_index_max = np.max(list_of_frame_index)
+
+        # # # bending detection
+        # some smoothing
+        dist_shoulder_hip_y_list = self.create_list_from_dict(track_framedict, 'dist_shoulder_hip_y', frame_index_min,
+                                                              frame_index_max)
+        dist_shoulder_hip_y = self.smoothing(dist_shoulder_hip_y_list)
+
+        trunk_angle_y_list = self.create_list_from_dict(track_framedict, 'trunk_angle_y', frame_index_min,
+                                                        frame_index_max)
+        trunk_angle_y = self.smoothing(trunk_angle_y_list)
+
+        # find bending based on trunk angle and distance between shoulder and hip middle
+        # (dist_shoulder_hip_y condition is redundant here. SOLVE THIS LATER)
+        trunk_angle_condition = ((trunk_angle_y > -70) | (trunk_angle_y < -120))
+        bending_condition = ((dist_shoulder_hip_y > -44) & trunk_angle_condition) | trunk_angle_condition
+        track_framedict[frame_index_max]['bending'] = int(bending_condition)
+
+        # dilate bending
+        bending_list = self.create_list_from_dict(track_framedict, 'bending', frame_index_min, frame_index_max)
+        if len(bending_list) >= self.delta_min and \
+                sum(~np.isnan(bending_list[-self.bending_dilate_delta:])) >= self.delta_min:
+            track_framedict[frame_index_max]['dilated_bending'] = self.dilate_bending(
+                bending_list[-self.bending_dilate_delta:])
+        else:
+            track_framedict[frame_index_max]['dilated_bending'] = np.nan
+
+        # # # trip fall detection
+        # CoG smoothing
+        CoG_norm_y_list = self.create_list_from_dict(track_framedict, 'CoG_norm_y', frame_index_min, frame_index_max)
+        track_framedict[frame_index_max]['smooth_CoG_norm_y'] = self.smoothing(CoG_norm_y_list)
+
+        smooth_CoG_norm_y_list = self.create_list_from_dict(track_framedict, 'smooth_CoG_norm_y', frame_index_min,
+                                                            frame_index_max)
+        # variability/std of CoG
+        var_CoG_norm_y = self.variability(smooth_CoG_norm_y_list)
+
+        # velocity/difference of CoG between current frame and a past frame
+        if len(smooth_CoG_norm_y_list) >= 1 + self.vel_delta:
+            vel_CoG_norm_y = smooth_CoG_norm_y_list[-1] - smooth_CoG_norm_y_list[-1 - self.vel_delta]
+        else:
+            vel_CoG_norm_y = np.nan
+
+        # CoG_bbox of legs smoothing
+        CoG_bbox_legs_y_list = self.create_list_from_dict(track_framedict, 'CoG_bbox_legs_y', frame_index_min,
+                                                          frame_index_max)
+        track_framedict[frame_index_max]['smooth_CoG_bbox_legs_y'] = self.smoothing(CoG_bbox_legs_y_list)
 
         # variability of CoG_bbox of legs
-        track_info['var_CoG_bbox_legs_x'] = track_info['CoG_bbox_legs_x'].rolling(self.var_delta,
-                                                                                  min_periods=self.delta_min).std()
-        track_info['var_CoG_bbox_legs_y'] = track_info['CoG_bbox_legs_y'].rolling(self.var_delta,
-                                                                                  min_periods=self.delta_min).std()
-        track_info['var_CoG_bbox_legs_score'] = track_info['CoG_bbox_legs_score']
-
-        # condition on var_CoG_bbox_legs to detect falling/tripping
-        track_info['var_CoG_bbox_legs'] = np.zeros_like(track_info['occlusion'])
-        track_info.loc[(np.abs(track_info['var_CoG_bbox_legs_y']) >= 2), ['var_CoG_bbox_legs']] = 1
+        smooth_CoG_bbox_legs_y_list = self.create_list_from_dict(track_framedict, 'smooth_CoG_bbox_legs_y',
+                                                                 frame_index_min,
+                                                                 frame_index_max)
+        var_CoG_bbox_legs_y = self.variability(smooth_CoG_bbox_legs_y_list)
 
         # falling/tripping detection based on var and vel of CoG and var of CoG_bbox of legs
-        track_info['detection'] = np.zeros_like(track_info['occlusion'])
-        detection_condition = (np.abs(track_info['var_smooth_CoG_norm_y']) > 4) | \
-                              (np.abs(track_info['vel_CoG_norm_y']) > 8) | \
-                              (np.abs(track_info['var_CoG_bbox_legs_y']) > 4)
-        track_info.loc[detection_condition, ['detection']] = 1
+        detection_condition = (np.abs(var_CoG_norm_y) > 4) | \
+                              (np.abs(vel_CoG_norm_y) > 8) | \
+                              (np.abs(var_CoG_bbox_legs_y) > 4)
+        track_framedict[frame_index_max]['detection'] = int(detection_condition)
 
+        # condition on var_CoG_bbox_legs to remove falling/tripping false positives
+        var_CoG_bbox_legs = (np.abs(var_CoG_bbox_legs_y) >= 2).astype(int)
+        track_framedict[frame_index_max]['var_CoG_bbox_legs'] = var_CoG_bbox_legs
         # dilate var_CoG_bbox_legs
-        track_info['var_CoG_bbox_legs'] = track_info['var_CoG_bbox_legs'].rolling(self.CoG_dilate_delta,
-                                                                 min_periods=self.delta_min).apply(self.dilate_var_CoG)
+        var_CoG_bbox_legs_list = self.create_list_from_dict(track_framedict, 'var_CoG_bbox_legs', frame_index_min,
+                                                            frame_index_max)
+        if len(var_CoG_bbox_legs_list) >= self.delta_min and \
+                sum(~np.isnan(var_CoG_bbox_legs_list[-self.CoG_dilate_delta:])) >= self.delta_min:
+            var_CoG_bbox_legs = self.dilate_var_CoG(var_CoG_bbox_legs_list[-self.CoG_dilate_delta:])
+        else:
+            var_CoG_bbox_legs = np.nan
 
         # remove false positives from detection using dilated var_CoG_bbox_legs
         # i.e., if var_CoG_bbox_legs is 0, then it is not falling/tripping for sure
-        track_info.loc[(np.abs(track_info['var_CoG_bbox_legs']) == 0), ['detection']] = 0
+        if np.abs(var_CoG_bbox_legs) == 0:
+            track_framedict[frame_index_max]['detection'] = 0
 
         # remove bending from falling detection
-        track_info.loc[track_info['bending'] == 1, ['detection']] = 0
+        if track_framedict[frame_index_max]['dilated_bending'] == 1:
+            track_framedict[frame_index_max]['detection'] = 0
 
         # find the detection confidence
         # take a window of length conf_delta starting from current frame,
         # sum all falling detection frames in that window and normalise it with window size
-        limit = np.min([len(track_info['detection']), self.conf_delta])
-        detection_conf = np.sum(track_info['detection'].iloc[-limit:]) / self.conf_delta
+        detection_list = self.create_list_from_dict(track_framedict, 'detection', frame_index_min, frame_index_max)
+
+        # fill in nans/missing frames with interpolation of nearest frames
+        mask = np.isnan(detection_list)
+        if 0 < sum(mask) < len(detection_list):
+            detection_list[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask), detection_list[~mask])
+            detection_list = np.round(detection_list)
+
+        limit = np.min([len(detection_list), self.conf_delta])
+        detection_conf = np.nansum(detection_list[-limit:]) / self.conf_delta
         if np.isnan(detection_conf): detection_conf = 0
         detection_conf = np.round(detection_conf, 2)
 
         # find the bending confidence same as before
-        limit = np.min([len(track_info['bending']), self.conf_delta])
-        bending_conf = np.sum(track_info['bending'].iloc[-limit:]) / self.conf_delta
+        dilated_bending_list = self.create_list_from_dict(track_framedict, 'dilated_bending', frame_index_min,
+                                                          frame_index_max)
+
+        # fill in nans
+        mask = np.isnan(dilated_bending_list)
+        if 0 < sum(mask) < len(dilated_bending_list):
+            dilated_bending_list[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask),
+                                                   dilated_bending_list[~mask])
+            dilated_bending_list = np.round(dilated_bending_list)
+
+        limit = np.min([len(dilated_bending_list), self.conf_delta])
+        bending_conf = np.nansum(dilated_bending_list[-limit:]) / self.conf_delta
         if np.isnan(bending_conf): bending_conf = 0
         bending_conf = np.round(bending_conf, 2)
 

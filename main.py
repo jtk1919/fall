@@ -1,6 +1,6 @@
 import os
 import time
-from frame_looper import FrameLooper
+from .frame_looper import FrameLooper
 
 """
 This is the main function. Change the video root. 
