@@ -25,7 +25,7 @@ class FallingDetector:
             self.video_found = True
         else:
             self.video_found = False
-            print('Error: Could not find the video file in ', self.video_path)
+            raise Exception('Error: Could not find the video file in ', self.video_path)
 
         # read cpp json output
         self.cpp_json_path = os.path.join(self.video_root, self.video_name,
@@ -36,8 +36,7 @@ class FallingDetector:
         except Exception as e:
             self.cpp_json = None
             self.cpp_json_found = False
-            print(e)
-            pass
+            raise Exception(e)
 
         # save cpp json
         self.cpp_json_save_path = os.path.join(self.video_root, self.video_name,
