@@ -1,8 +1,9 @@
 import os
 import time
 import cv2
+import logging
 import numpy as np
-from falling_down_detector.utils import load_json, save_json, get_occ_iou
+from .utils import load_json, save_json, get_occ_iou
 
 
 class FallingDetector:
@@ -219,50 +220,54 @@ class FallingDetector:
 
         for self.frame_index in range(len(self.cpp_json["outputs"])):
             start = time.time()
-            if self.frame_index % 10000 == 0: print(f"{self.frame_index} / {total_frame}")
+            if self.frame_index % 10000 == 0:
+                logging.info(f"{self.frame_index} / {total_frame}")
             # get the detections of the frame
             detections = self.cpp_json["outputs"][self.frame_index]["detections"]
-            # check if the detection has track id and pose
-            detections = [det for det in detections if 'id' in det.keys() and 'body_skeleton' in det.keys()
-                          and len(det['body_skeleton']) > 0]
+            # check if the detection is person, has track id and pose
+            selected_detections = [det for det in detections if det['class'] == 4 and 'id' in det.keys() and
+                                   'body_skeleton' in det.keys() and len(det['body_skeleton']) > 0]
             for ii in range(len(detections)):
                 det = detections[ii]
+                # check if the detection is person, has track id and pose
+                if det['class'] == 4 and 'id' in det.keys() and 'body_skeleton' in det.keys() and \
+                        len(det['body_skeleton']) > 0:
 
-                # get all data for the track for that frame
-                frame_dict = self.fill_frame_dict(self.frame_index, det)
-                # find if it is occluded by any other track, bbox iou based occlusion detection
-                pp_occ = self.person_person_occlusion(det, detections)
-                # combine person person occlusion with occlusion based on position of bbox in image
-                frame_dict['occlusion'] = frame_dict['occlusion'] | pp_occ
-                # update the frame dict with falling detection related information
-                frame_dict = self.fill_frame_dict_fall_det_data(frame_dict.copy())
+                    # get all data for the track for that frame
+                    frame_dict = self.fill_frame_dict(self.frame_index, det)
+                    # find if it is occluded by any other track, bbox iou based occlusion detection
+                    pp_occ = self.person_person_occlusion(det, selected_detections)
+                    # combine person person occlusion with occlusion based on position of bbox in image
+                    frame_dict['occlusion'] = frame_dict['occlusion'] | pp_occ
+                    # update the frame dict with falling detection related information
+                    frame_dict = self.fill_frame_dict_fall_det_data(frame_dict.copy())
 
-                # create track id in track dict for track analysis
-                if det['id'] not in self.track_dict:  # then its the first frame of the track
-                    self.track_dict[det['id']] = {}
-                # update the frame data to the track dict
-                self.track_dict[det['id']][self.frame_index] = frame_dict
-                # only have the latest frames and remove the rest of history
-                self.track_dict[det['id']] = {key: value for key, value in self.track_dict[det['id']].items()
-                                              if key in range(self.frame_index - int(75),
-                                                              self.frame_index + 1)}
+                    # create track id in track dict for track analysis
+                    if det['id'] not in self.track_dict:  # then its the first frame of the track
+                        self.track_dict[det['id']] = {}
+                    # update the frame data to the track dict
+                    self.track_dict[det['id']][self.frame_index] = frame_dict
+                    # only have the latest frames and remove the rest of history
+                    self.track_dict[det['id']] = {key: value for key, value in self.track_dict[det['id']].items()
+                                                  if key in range(self.frame_index - int(75),
+                                                                  self.frame_index + 1)}
 
-                # detect falling
-                falling_conf, bending_conf = self.falling_detector(self.track_dict[det['id']])
-                if falling_conf > 0:
-                    print(self.frame_index, det['id'], 'falling', np.round(falling_conf, 2))
-                if bending_conf > 0:
-                    print(self.frame_index, det['id'], 'bending', np.round(bending_conf, 2))
-                # populate cpp json
-                self.cpp_json["outputs"][self.frame_index]["detections"][ii]['falling_detection_conf'] = falling_conf
-                self.cpp_json["outputs"][self.frame_index]["detections"][ii]['bending_detection_conf'] = bending_conf
-                self.cpp_json["outputs"][self.frame_index]["detections"][ii]['occlusion'] = frame_dict['occlusion']
-                duration = time.time() - start
-                total_time = total_time + duration
+                    # detect falling
+                    falling_conf, bending_conf = self.falling_detector(self.track_dict[det['id']])
+                    if falling_conf > 0:
+                        logging.info(f"{self.frame_index}, {det['id']}, 'falling', {np.round(falling_conf, 2)}")
+                    if bending_conf > 0:
+                        logging.info(f"{self.frame_index}, {det['id']}, 'bending', {np.round(bending_conf, 2)}")
+                    # populate cpp json
+                    self.cpp_json["outputs"][self.frame_index]["detections"][ii]['falling_detection_conf'] = falling_conf
+                    self.cpp_json["outputs"][self.frame_index]["detections"][ii]['bending_detection_conf'] = bending_conf
+                    self.cpp_json["outputs"][self.frame_index]["detections"][ii]['occlusion'] = frame_dict['occlusion']
+                    duration = time.time() - start
+                    total_time = total_time + duration
 
         # save cpp json
         save_json(self.cpp_json_save_path, self.cpp_json)
-        print('Total time ', total_time)
+        logging.info(f"Total time, {total_time}")
 
     def fill_frame_dict(self, frame_index, det):
         """
