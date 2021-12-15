@@ -1,8 +1,9 @@
 import os
 import time
 import cv2
+import logging
 import numpy as np
-from falling_down_detector.utils import load_json, save_json, get_occ_iou
+from .utils import load_json, save_json, get_occ_iou
 
 
 class FallingDetector:
@@ -219,7 +220,8 @@ class FallingDetector:
 
         for self.frame_index in range(len(self.cpp_json["outputs"])):
             start = time.time()
-            if self.frame_index % 10000 == 0: print(f"{self.frame_index} / {total_frame}")
+            if self.frame_index % 10000 == 0:
+                logging.info(f"{self.frame_index} / {total_frame}")
             # get the detections of the frame
             detections = self.cpp_json["outputs"][self.frame_index]["detections"]
             # check if the detection is person, has track id and pose
@@ -253,9 +255,9 @@ class FallingDetector:
                     # detect falling
                     falling_conf, bending_conf = self.falling_detector(self.track_dict[det['id']])
                     if falling_conf > 0:
-                        print(self.frame_index, det['id'], 'falling', np.round(falling_conf, 2))
+                        logging.info(f"{self.frame_index}, {det['id']}, 'falling', {np.round(falling_conf, 2)}")
                     if bending_conf > 0:
-                        print(self.frame_index, det['id'], 'bending', np.round(bending_conf, 2))
+                        logging.info(f"{self.frame_index}, {det['id']}, 'bending', {np.round(bending_conf, 2)}")
                     # populate cpp json
                     self.cpp_json["outputs"][self.frame_index]["detections"][ii]['falling_detection_conf'] = falling_conf
                     self.cpp_json["outputs"][self.frame_index]["detections"][ii]['bending_detection_conf'] = bending_conf
@@ -265,7 +267,7 @@ class FallingDetector:
 
         # save cpp json
         save_json(self.cpp_json_save_path, self.cpp_json)
-        print('Total time ', total_time)
+        logging.info(f"Total time, {total_time}")
 
     def fill_frame_dict(self, frame_index, det):
         """
