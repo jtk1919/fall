@@ -8,19 +8,18 @@ from .utils import load_json, save_json, get_occ_iou
 
 class FallingDetector:
 
-    def __init__(self, video_name, video_root):
+    def __init__(self, video_path, cpp_json_path):
         """
         Loops through cpp json output data, performs falling detection on the data and updates the cpp json with
         falling detection. The following are added to the cpp json output. For each detection in a frame,
         falling_detection_confidence (float- 0 to 1), bending_detection_confidence (float- 0 to 1), occlusion (bool)
 
-        @param video_name: (string) name of the video
-        @param video_root: (string) folder in which the video is present
+        @param video_path: (string) Path to the local video
+        @param cpp_json_path: (string) Path to the local cpp json file.
         """
+        self.video_path = video_path
+        self.cpp_json_path = cpp_json_path
 
-        self.video_root = video_root
-        self.video_name = video_name
-        self.video_path = os.path.join(video_root, self.video_name, self.video_name + '.mp4')
         # check if the video exists at the given path
         if os.path.exists(self.video_path):
             self.video_found = True
@@ -29,8 +28,6 @@ class FallingDetector:
             raise Exception('Error: Could not find the video file in ', self.video_path)
 
         # read cpp json output
-        self.cpp_json_path = os.path.join(self.video_root, self.video_name,
-                                          self.video_name + '.json')
         try:
             self.cpp_json = load_json(self.cpp_json_path)
             self.cpp_json_found = True
@@ -40,8 +37,7 @@ class FallingDetector:
             raise Exception(e)
 
         # save cpp json
-        self.cpp_json_save_path = os.path.join(self.video_root, self.video_name,
-                                               self.video_name + '_output.json')
+        self.output_path = self.cpp_json_path.replace('.json', '_output.json')
 
         # read video and get the video settings
         self.video_reader = cv2.VideoCapture(self.video_path)
@@ -266,8 +262,10 @@ class FallingDetector:
                     total_time = total_time + duration
 
         # save cpp json
-        save_json(self.cpp_json_save_path, self.cpp_json)
+        save_json(self.output_path, self.cpp_json)
         logging.info(f"Total time, {total_time}")
+
+        return self.output_path
 
     def fill_frame_dict(self, frame_index, det):
         """
