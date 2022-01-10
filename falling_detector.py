@@ -226,40 +226,44 @@ class FallingDetector:
             for ii in range(len(detections)):
                 det = detections[ii]
                 # check if the detection is person, has track id and pose
-                if det['class'] == 4 and 'id' in det.keys() and 'body_skeleton' in det.keys() and \
-                        len(det['body_skeleton']) > 0:
+                if det['class'] == 4 and 'id' in det.keys():
+                    if 'body_skeleton' in det.keys() and len(det['body_skeleton']) > 0:
+                        # get all data for the track for that frame
+                        frame_dict = self.fill_frame_dict(self.frame_index, det)
+                        # find if it is occluded by any other track, bbox iou based occlusion detection
+                        pp_occ = self.person_person_occlusion(det, selected_detections)
+                        # combine person person occlusion with occlusion based on position of bbox in image
+                        frame_dict['occlusion'] = frame_dict['occlusion'] | pp_occ
+                        # update the frame dict with falling detection related information
+                        frame_dict = self.fill_frame_dict_fall_det_data(frame_dict.copy())
 
-                    # get all data for the track for that frame
-                    frame_dict = self.fill_frame_dict(self.frame_index, det)
-                    # find if it is occluded by any other track, bbox iou based occlusion detection
-                    pp_occ = self.person_person_occlusion(det, selected_detections)
-                    # combine person person occlusion with occlusion based on position of bbox in image
-                    frame_dict['occlusion'] = frame_dict['occlusion'] | pp_occ
-                    # update the frame dict with falling detection related information
-                    frame_dict = self.fill_frame_dict_fall_det_data(frame_dict.copy())
+                        # create track id in track dict for track analysis
+                        if det['id'] not in self.track_dict:  # then its the first frame of the track
+                            self.track_dict[det['id']] = {}
+                        # update the frame data to the track dict
+                        self.track_dict[det['id']][self.frame_index] = frame_dict
+                        # only have the latest frames and remove the rest of history
+                        self.track_dict[det['id']] = {key: value for key, value in self.track_dict[det['id']].items()
+                                                      if key in range(self.frame_index - int(75),
+                                                                      self.frame_index + 1)}
 
-                    # create track id in track dict for track analysis
-                    if det['id'] not in self.track_dict:  # then its the first frame of the track
-                        self.track_dict[det['id']] = {}
-                    # update the frame data to the track dict
-                    self.track_dict[det['id']][self.frame_index] = frame_dict
-                    # only have the latest frames and remove the rest of history
-                    self.track_dict[det['id']] = {key: value for key, value in self.track_dict[det['id']].items()
-                                                  if key in range(self.frame_index - int(75),
-                                                                  self.frame_index + 1)}
-
-                    # detect falling
-                    falling_conf, bending_conf = self.falling_detector(self.track_dict[det['id']])
-                    if falling_conf > 0:
-                        logging.info(f"{self.frame_index}, {det['id']}, 'falling', {np.round(falling_conf, 2)}")
-                    if bending_conf > 0:
-                        logging.info(f"{self.frame_index}, {det['id']}, 'bending', {np.round(bending_conf, 2)}")
-                    # populate cpp json
-                    self.cpp_json["outputs"][self.frame_index]["detections"][ii]['falling_detection_conf'] = falling_conf
-                    self.cpp_json["outputs"][self.frame_index]["detections"][ii]['bending_detection_conf'] = bending_conf
-                    self.cpp_json["outputs"][self.frame_index]["detections"][ii]['occlusion'] = frame_dict['occlusion']
-                    duration = time.time() - start
-                    total_time = total_time + duration
+                        # detect falling
+                        falling_conf, bending_conf = self.falling_detector(self.track_dict[det['id']])
+                        if falling_conf > 0:
+                            logging.info(f"{self.frame_index}, {det['id']}, 'falling', {np.round(falling_conf, 2)}")
+                        if bending_conf > 0:
+                            logging.info(f"{self.frame_index}, {det['id']}, 'bending', {np.round(bending_conf, 2)}")
+                        # populate cpp json
+                        self.cpp_json["outputs"][self.frame_index]["detections"][ii]['falling_detection_conf'] = falling_conf
+                        self.cpp_json["outputs"][self.frame_index]["detections"][ii]['bending_detection_conf'] = bending_conf
+                        self.cpp_json["outputs"][self.frame_index]["detections"][ii]['occlusion'] = frame_dict['occlusion']
+                        duration = time.time() - start
+                        total_time = total_time + duration
+                    else:
+                        # populate cpp json
+                        self.cpp_json["outputs"][self.frame_index]["detections"][ii]['falling_detection_conf'] = None
+                        self.cpp_json["outputs"][self.frame_index]["detections"][ii]['bending_detection_conf'] = None
+                        self.cpp_json["outputs"][self.frame_index]["detections"][ii]['occlusion'] = None
 
         # save cpp json
         save_json(self.output_path, self.cpp_json)
