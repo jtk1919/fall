@@ -43,23 +43,5 @@ detected as bending at the moment. Only trips/slips are detected as falling.
 So to find the true positives, it is advisable to go through both 
 falling and bending tracks. 
 
-### To be solved in future
 
-Following are some common false positives
-- Squats 
-- Orange safety cones confused with person legs, hence leg pose joints
-become disproportionate
-- Track id switching, causes sudden change in appearance
-- Occlusion by objects, confuses pose sometimes
-
-Following are some common false negatives
-- Missing detections, people's grey dress is confused with background
-or frame gets blurred/smudged patch by patch 
-
-In the algorithm's bending detection, distance between shoulder and hip in y direction and trunk angle are the conditions
-found. But distance between shoulder and hip condition is redundant in the current version (i.e. it is not really used. 
-Only trunk condition is used.) Solve this later. 
-
-## Authors
-Yazhini Chitra Pradeep
 
